@@ -1,0 +1,16 @@
+[
+  {
+    "url": "https://www.subito.it/annunci-italia/vendita/usato/?q=iphone+16",
+    "filters": {
+      "min_price": 500,
+      "max_price": 800,
+      "shipping_available": true
+    }
+  },
+  {
+    "url": "https://www.subito.it/annunci-italia/vendita/usato/?q=playstation+5",
+    "filters": {
+      "max_price": 350
+    }
+  }
+]
