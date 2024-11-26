@@ -29,8 +29,8 @@ Parameters
 SCHEDULE_INTERVAL_MINUTES = 15
 
 # Telegram bot configuration (replace with your credentials)
-BOT_TOKEN = 'your_bot_token_here'
-BOT_CHAT_ID = 'your_chat_id_here'
+BOT_TOKEN = os.environ['SUBITO_TELEGRAM_BOT_TOKEN']
+BOT_CHAT_ID = os.environ['SUBITO_TELEGRAM_BOT_CHAT_ID']
 
 
 def telegram_bot_send_deal(message: str) -> None:
