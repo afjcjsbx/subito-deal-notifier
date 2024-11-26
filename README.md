@@ -42,9 +42,11 @@ BOT_TOKEN: The token for your bot.
 BOT_CHAT_ID: The chat ID where notifications should be sent.
 Update the script:
 
+set them as env vars
+
 ```python
-BOT_TOKEN = 'your_bot_token_here'
-BOT_CHAT_ID = 'your_chat_id_here'
+BOT_TOKEN = os.environ['SUBITO_TELEGRAM_BOT_TOKEN']
+BOT_CHAT_ID = os.environ['SUBITO_TELEGRAM_BOT_CHAT_ID']
 ```
 
 2. JSON File for URLs
