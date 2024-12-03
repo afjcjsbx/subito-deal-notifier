@@ -32,6 +32,9 @@ SCHEDULE_INTERVAL_MINUTES = 15
 BOT_TOKEN = os.environ['SUBITO_TELEGRAM_BOT_TOKEN']
 BOT_CHAT_ID = os.environ['SUBITO_TELEGRAM_BOT_CHAT_ID']
 
+# COLD_START parameter: True by default
+COLD_START = os.getenv('SUBITO_COLD_START', 'true').lower() == 'true'
+
 
 def telegram_bot_send_deal(message: str) -> None:
     """
@@ -51,7 +54,7 @@ def telegram_bot_send_deal(message: str) -> None:
     return None
 
 
-def fetch_with_backoff(url: str, proxies=None, max_retries: int = 3, retry_delay: int = 1) -> Optional[httpx.Response]:
+def fetch_with_backoff(url: str, proxies=None, max_retries: int = 5, retry_delay: int = 3) -> Optional[httpx.Response]:
     """
     Makes HTTP requests with exponential backoff logic in case of errors.
 
@@ -92,36 +95,6 @@ def fetch_with_backoff(url: str, proxies=None, max_retries: int = 3, retry_delay
             retry_delay = retry_delay * 2 + random.uniform(0, 1)
 
     logger.error("Maximum retry attempts reached for %s", url)
-    return None
-
-
-def extract_price_from_html(html_response: str) -> Optional[int]:
-    """
-    Extracts the price from the HTML response.
-
-    :param html_response: The HTML response of the page
-    :return: The extracted price as integer or None if not found
-    """
-    # Initialise BeautifulSoup with the HTML source
-    soup = BeautifulSoup(html_response, 'html.parser')
-
-    # Search for the <p> tag containing the price class
-    price_tag = soup.find('p',
-                          class_='index-module_price__N7M2x SmallCard-module_price__yERv7 index-module_small__4SyUf')
-    if price_tag:
-        # Extract the text from the <p> tag and remove any spaces
-        price_text = price_tag.get_text().strip()
-
-        # Use a regex to extract the number from the price text
-        price_match = re.search(r'(\d+)', price_text.replace(u'\xa0', u' '))  # Sostituisce gli spazi non-breaking
-
-        if price_match:
-            return int(price_match.group(1))  # Return the price as an integer
-
-    # If no price is found, register a warning
-    logger.warning("Price not found in HTML")
-
-    # Return None if price not found
     return None
 
 
@@ -217,6 +190,55 @@ def extract_first_link(html_content: str) -> Optional[str]:
     return None
 
 
+def extract_price_from_html(html_response: str) -> Optional[int]:
+    """
+    Extracts the price from the HTML response, handling thousand separators.
+
+    :param html_response: The HTML response of the page
+    :return: The extracted price as integer or None if not found
+    """
+    soup = BeautifulSoup(html_response, 'html.parser')
+    price_tag = soup.find('p', class_='index-module_price__N7M2x SmallCard-module_price__yERv7 index-module_small__4SyUf')
+    if price_tag:
+        price_text = price_tag.get_text().strip()
+        # Remove thousand separators (dots) and extract digits
+        price_cleaned = price_text.replace('.', '').replace(',', '').replace(u'\xa0', u' ')
+        price_match = re.search(r'(\d+)', price_cleaned)
+        if price_match:
+            return int(price_match.group(1))
+    logger.warning("Price not found in HTML")
+    return None
+
+
+def extract_title_from_html(html_response: str) -> Optional[str]:
+    """
+    Extracts the title from the HTML response, using a flexible tag search.
+
+    :param html_response: The HTML response of the page
+    :return: The extracted title or None if not found
+    """
+    soup = BeautifulSoup(html_response, 'html.parser')
+    # Look for various tag possibilities where the title might be located
+    title_tag = soup.find('h2', class_='index-module_title__Zvu61 SmallCard-module_title__RfMb- index-module_small__4SyUf')
+    if not title_tag:
+        # Try alternative ways if the specific class isn't found
+        title_tag = soup.find('h2') or soup.find('span', class_='title') or soup.find('div', class_='title')
+    if title_tag:
+        return title_tag.get_text().strip()
+    logger.warning("Title not found in HTML")
+    return None
+
+
+def extract_shipment_from_html(html_response: str) -> Optional[bool]:
+    """
+    Extracts the shipment availability from the HTML response.
+
+    :param html_response: The HTML response of the page
+    :return: True if shipment is available, False otherwise
+    """
+    return "spedizione disponibile" in html_response.lower()
+
+
 def report_change(url_data: dict) -> None:
     """
     Checks if there are changes for a given URL and applies filters.
@@ -226,47 +248,56 @@ def report_change(url_data: dict) -> None:
     url = url_data.get("url")
     filters = url_data.get("filters", {})
 
-    # Make request
     response = fetch_with_backoff(url)
     if not response:
         return
 
     html_response = response.text
-
-    # Extract all div blocks of the current advertisements
     current_announcements = []
+
     if 'subito' in url:
         div_blocks = extract_all_div_blocks(html_response)
         for div_block in div_blocks:
             announcement_link = extract_first_link(div_block)
-
-            # Apply filters and, if satisfied, add to list of current listings
             if apply_filters(div_block, filters) and announcement_link:
-                current_announcements.append(announcement_link)
+                current_announcements.append((announcement_link, div_block))
 
-    # Load the cache of already notified announcements
     file_name = ''.join(x for x in url if x.isalpha()) + "_cache.txt"
     cache_file_path = os.path.join(DATA_FOLDER, file_name)
     cached_announcements = set()
+
     if os.path.exists(cache_file_path):
         with open(cache_file_path, "r") as cache_file:
             cached_announcements = set(cache_file.read().splitlines())
+    elif not COLD_START:
+        logger.info("Cache file not found. Initializing cache for %s without sending notifications.", url)
+        with open(cache_file_path, "w") as cache_file:
+            cache_file.write("\n".join([link for link, _ in current_announcements]))
+        return
 
-    # Filter ads not yet notified
-    new_announcements = [link for link in current_announcements if link not in cached_announcements]
+    new_announcements = [item for item in current_announcements if item[0] not in cached_announcements]
 
-    # Notify only new announcements and update cache
     if new_announcements:
-        for announcement in new_announcements:
-            telegram_bot_send_deal(f"New ad: {announcement}")
-            logger.info("New ad -> %s", announcement)
+        for announcement, div_block in new_announcements:
+            price = extract_price_from_html(div_block)
+            title = extract_title_from_html(div_block)
+            shipment = "Yes" if extract_shipment_from_html(div_block) else "No"
 
-        # Update the cache file by adding new announcements
+            message = (
+                f"🔗 Link: {announcement}\n\n"
+                f"📚 Title: {title if title else 'Unknown'}\n"
+                f"💰 Price: {price if price else 'Unknown'}€\n"
+                f"📦 Shipment: {shipment}\n"
+            )
+            telegram_bot_send_deal(message)
+            logger.info(message)
+
         with open(cache_file_path, "a") as cache_file:
-            for announcement in new_announcements:
+            for announcement, _ in new_announcements:
                 cache_file.write(announcement + "\n")
     else:
         logger.info("No change detected for %s", url)
+
 
 
 def scan_urls(file_path: str = "subito_urls.json") -> None:
@@ -283,7 +314,7 @@ def scan_urls(file_path: str = "subito_urls.json") -> None:
 
 
 def main() -> None:
-    logger.info("Starting subito-deal-notifier")
+    logger.info("Starting subito-deal-notifier with COLD_START=%s", COLD_START)
     scan_urls()
 
     schedule.every(SCHEDULE_INTERVAL_MINUTES).minutes.do(scan_urls)
