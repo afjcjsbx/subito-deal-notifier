@@ -51,8 +51,8 @@ class MSGS:
     system: str
 
     @property
-    def to_json(self):
+    def to_messages(self):
         return [
-            {"role": "user","content": self.user}
+            {"role": "user", "content": self.user}
             , { "role": "system", "content": self.system}
         ]
