@@ -21,7 +21,7 @@ Your answer should in JSON format. The JSON should contain the following fields:
 - "product_feature": an array of strings, each string describing the product features that influenced your decision
 """
 
-class PromptParser:
+class Prompt:
     def __init__(self):
         self.system_prompt = system_prompt
         self.user_prompt = user_prompt

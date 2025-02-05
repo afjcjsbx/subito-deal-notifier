@@ -44,3 +44,15 @@ class input_context:
             "context_description": self.contex_description,
             "context_sources": [source.to_json for source in self.context_sources]
         }
+
+@dataclass
+class MSGS:
+    user: str
+    system: str
+
+    @property
+    def to_json(self):
+        return [
+            {"role": "user","content": self.user}
+            , { "role": "system", "content": self.system}
+        ]
