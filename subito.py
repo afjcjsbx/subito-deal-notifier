@@ -5,6 +5,8 @@ import random
 import re
 import time
 import urllib.parse
+
+from SubitoAnnuncio import SubitoAnnuncio
 from typing import Optional
 
 import httpx
@@ -29,29 +31,30 @@ Parameters
 SCHEDULE_INTERVAL_MINUTES = 15
 
 # Telegram bot configuration (replace with your credentials)
-BOT_TOKEN = os.environ['SUBITO_TELEGRAM_BOT_TOKEN']
-BOT_CHAT_ID = os.environ['SUBITO_TELEGRAM_BOT_CHAT_ID']
+
+#BOT_TOKEN = os.environ['SUBITO_TELEGRAM_BOT_TOKEN']
+#BOT_CHAT_ID = os.environ['SUBITO_TELEGRAM_BOT_CHAT_ID']
 
 # COLD_START parameter: True by default
 COLD_START = os.getenv('SUBITO_COLD_START', 'true').lower() == 'true'
 
 
-def telegram_bot_send_deal(message: str) -> None:
-    """
-    Send a message via the Telegram bot.
-
-    :param message: The message to send
-    :return: The bot's response in the form of a JSON dictionary
-    """
-    send_text = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage?chat_id={BOT_CHAT_ID}&parse_mode=Markdown&text={urllib.parse.quote(message)}'
-
-    proxy = "http://212.237.59.187:58080"
-    proxies = {"http://": proxy, "https://": proxy}
-
-    fetch_with_backoff(url=send_text, proxies=None, max_retries=10)
-    time.sleep(1) # To avoid Telegram API: 429 Too Many Requests
-
-    return None
+# def telegram_bot_send_deal(message: str) -> None:
+#     """
+#     Send a message via the Telegram bot.
+#
+#     :param message: The message to send
+#     :return: The bot's response in the form of a JSON dictionary
+#     """
+#     send_text = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage?chat_id={BOT_CHAT_ID}&parse_mode=Markdown&text={urllib.parse.quote(message)}'
+#
+#     proxy = "http://212.237.59.187:58080"
+#     proxies = {"http://": proxy, "https://": proxy}
+#
+#     fetch_with_backoff(url=send_text, proxies=None, max_retries=10)
+#     time.sleep(1) # To avoid Telegram API: 429 Too Many Requests
+#
+#     return None
 
 
 def fetch_with_backoff(url: str, proxies=None, max_retries: int = 5, retry_delay: int = 3) -> Optional[httpx.Response]:
@@ -289,12 +292,18 @@ def report_change(url_data: dict) -> None:
                 f"💰 Price: {price if price else 'Unknown'}€\n"
                 f"📦 Shipment: {shipment}\n"
             )
-            telegram_bot_send_deal(message)
+
+            print("ann:" + announcement)
+            details = SubitoAnnuncio(announcement)
+            details.extract_data()
+            print(details.to_json())
+
+            #telegram_bot_send_deal(message)
             logger.info(message)
 
-        with open(cache_file_path, "a") as cache_file:
-            for announcement, _ in new_announcements:
-                cache_file.write(announcement + "\n")
+            with open(cache_file_path, "a") as cache_file:
+                for announcement, _ in new_announcements:
+                    cache_file.write(announcement + "\n")
     else:
         logger.info("No change detected for %s", url)
 
@@ -325,7 +334,6 @@ def main() -> None:
             time.sleep(1)
         except Exception as e:
             logger.error("An error occurred: %s", str(e))
-
 
 if __name__ == "__main__":
     main()
