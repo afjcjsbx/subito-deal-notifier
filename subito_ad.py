@@ -3,7 +3,7 @@ import httpx
 from bs4 import BeautifulSoup
 import json
 
-class SubitoAnnuncio:
+class SubitoAd:
     def __init__(self, url: str):
         self.url = url
         self.product_title = None
@@ -56,7 +56,7 @@ class SubitoAnnuncio:
 
         return 'N/A'
 
-    def extract_price(self, html_content: str) -> tuple[float, str]:
+    def extract_price(self, html_content: str) -> float:
         """ Estrae il prezzo in modo universale e preserva la valuta """
         soup = BeautifulSoup(html_content, 'html.parser')
 
@@ -64,7 +64,7 @@ class SubitoAnnuncio:
         price_text = price_tag.get_text(strip=True) if price_tag else ''
 
         if not price_text:
-            return 0.0, ''
+            return 0.0
 
         valuta = re.search(r'€|£|\$', price_text)
         valuta_symbol = valuta.group(0) if valuta else ''
@@ -80,8 +80,7 @@ class SubitoAnnuncio:
         except ValueError:
             price = 0.0
 
-        return price, valuta_symbol
-
+        return price
 
 
     def extract_features(self, html_content: str) -> list:
@@ -99,8 +98,8 @@ class SubitoAnnuncio:
         for feature in add_feature:
             features.append(feature.get_text(strip=True))
 
-        if not features:
-            features.append('Nessuna caratteristica trovata')
+        # if not features:
+            # features.append('Nessuna caratteristica trovata')
 
         return features
 

@@ -1,104 +1,43 @@
 import json
-import logging
 import os
-import random
 import re
 import time
+import random
+import asyncio
+import schedule
+import threading
 import urllib.parse
 
-from SubitoAnnuncio import SubitoAnnuncio
-from typing import Optional
-
-import httpx
-import schedule
+from conf import Config
 from bs4 import BeautifulSoup
+from typing import Optional, Dict, Any
+from http_client import HttpClient
+from llm import LLM
+from logger_config import get_logger
+from subito_ad import SubitoAd
+from async_processor import AsyncProcessor
 
-# Configuration of the logger
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
-    datefmt='%d-%b-%y %H:%M:%S'
-)
-logger = logging.getLogger('subito-deal-notifier')
+logger = get_logger('subito-deal-notifier')
 
-# Directory to save data
-DATA_FOLDER = "data/"
-
-"""
-Parameters
-"""
-
-SCHEDULE_INTERVAL_MINUTES = 15
-
-# Telegram bot configuration (replace with your credentials)
-
-#BOT_TOKEN = os.environ['SUBITO_TELEGRAM_BOT_TOKEN']
-#BOT_CHAT_ID = os.environ['SUBITO_TELEGRAM_BOT_CHAT_ID']
-
-# COLD_START parameter: True by default
-COLD_START = os.getenv('SUBITO_COLD_START', 'true').lower() == 'true'
+processor = AsyncProcessor()
 
 
-# def telegram_bot_send_deal(message: str) -> None:
-#     """
-#     Send a message via the Telegram bot.
-#
-#     :param message: The message to send
-#     :return: The bot's response in the form of a JSON dictionary
-#     """
-#     send_text = f'https://api.telegram.org/bot{BOT_TOKEN}/sendMessage?chat_id={BOT_CHAT_ID}&parse_mode=Markdown&text={urllib.parse.quote(message)}'
-#
-#     proxy = "http://212.237.59.187:58080"
-#     proxies = {"http://": proxy, "https://": proxy}
-#
-#     fetch_with_backoff(url=send_text, proxies=None, max_retries=10)
-#     time.sleep(1) # To avoid Telegram API: 429 Too Many Requests
-#
-#     return None
-
-
-def fetch_with_backoff(url: str, proxies=None, max_retries: int = 5, retry_delay: int = 3) -> Optional[httpx.Response]:
+def telegram_bot_send_deal(message: str) -> bool:
     """
-    Makes HTTP requests with exponential backoff logic in case of errors.
+    Send a message via the Telegram bot.
 
-    :param url: The URL to obtain data from
-    :param proxies: The proxy to use (optional)
-    :param max_retries: Maximum number of retries in case of an error
-    :param retry_delay: The initial delay in seconds between retries
-    :return: The HTTP response, or None if all attempts fail
+    :param message: The message to send
+    :return: The bot's response in the form of a JSON dictionary
     """
-    base_headers = {
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
-        "accept-language": "it-IT;it;q=0.9",
-        "accept-encoding": "gzip, deflate, br",
-    }
+    send_text = f'https://api.telegram.org/bot{Config.BOT_TOKEN}/sendMessage?chat_id={Config.BOT_CHAT_ID}&parse_mode=Markdown&text={urllib.parse.quote(message)}'
 
-    for attempt in range(max_retries):
-        if attempt > 0:
-            logger.info("Retry n: %d for url: %s", attempt, url)
+    proxy = "http://212.237.59.187:58080"
+    proxies = {"http://": proxy, "https://": proxy}
 
-        try:
-            # Configure the httpx client with or without proxy
-            client_args = {
-                "headers": base_headers,
-                "follow_redirects": True,
-                "timeout": 30.0,
-            }
-            if proxies:
-                client_args["proxies"] = proxies
+    HttpClient.fetch_with_backoff(url=send_text, proxies=None, max_retries=10)
+    time.sleep(1)  # To avoid Telegram API: 429 Too Many Requests
 
-            with httpx.Client(**client_args) as client:
-                response = client.get(url)
-                response.raise_for_status()
-                return response
-        except (httpx.RequestError, httpx.HTTPStatusError) as error:
-            logger.error("Failed to fetch data (%s) from %s, waiting %d seconds before retry", error, url, retry_delay)
-            time.sleep(retry_delay)
-            retry_delay = retry_delay * 2 + random.uniform(0, 1)
-
-    logger.error("Maximum retry attempts reached for %s", url)
-    return None
+    return True
 
 
 def load_urls_from_json(file_path: str) -> list:
@@ -201,7 +140,8 @@ def extract_price_from_html(html_response: str) -> Optional[int]:
     :return: The extracted price as integer or None if not found
     """
     soup = BeautifulSoup(html_response, 'html.parser')
-    price_tag = soup.find('p', class_='index-module_price__N7M2x SmallCard-module_price__yERv7 index-module_small__4SyUf')
+    price_tag = soup.find('p',
+                          class_='index-module_price__N7M2x SmallCard-module_price__yERv7 index-module_small__4SyUf')
     if price_tag:
         price_text = price_tag.get_text().strip()
         # Remove thousand separators (dots) and extract digits
@@ -222,7 +162,8 @@ def extract_title_from_html(html_response: str) -> Optional[str]:
     """
     soup = BeautifulSoup(html_response, 'html.parser')
     # Look for various tag possibilities where the title might be located
-    title_tag = soup.find('h2', class_='index-module_title__Zvu61 SmallCard-module_title__RfMb- index-module_small__4SyUf')
+    title_tag = soup.find('h2',
+                          class_='index-module_title__Zvu61 SmallCard-module_title__RfMb- index-module_small__4SyUf')
     if not title_tag:
         # Try alternative ways if the specific class isn't found
         title_tag = soup.find('h2') or soup.find('span', class_='title') or soup.find('div', class_='title')
@@ -242,16 +183,14 @@ def extract_shipment_from_html(html_response: str) -> Optional[bool]:
     return "spedizione disponibile" in html_response.lower()
 
 
-def report_change(url_data: dict) -> None:
+async def report_change_async(url_data: dict) -> None:
     """
-    Checks if there are changes for a given URL and applies filters.
-
-    :param url_data: A dictionary with the URL and associated filters
+    Asynchronous version of report_change to allow async task execution.
     """
     url = url_data.get("url")
     filters = url_data.get("filters", {})
 
-    response = fetch_with_backoff(url)
+    response = HttpClient.fetch_with_backoff(url)  # Fetch in a non-blocking way
     if not response:
         return
 
@@ -266,13 +205,13 @@ def report_change(url_data: dict) -> None:
                 current_announcements.append((announcement_link, div_block))
 
     file_name = ''.join(x for x in url if x.isalpha()) + "_cache.txt"
-    cache_file_path = os.path.join(DATA_FOLDER, file_name)
+    cache_file_path = os.path.join(Config.DATA_FOLDER, file_name)
     cached_announcements = set()
 
     if os.path.exists(cache_file_path):
         with open(cache_file_path, "r") as cache_file:
             cached_announcements = set(cache_file.read().splitlines())
-    elif not COLD_START:
+    elif not Config.COLD_START:
         logger.info("Cache file not found. Initializing cache for %s without sending notifications.", url)
         with open(cache_file_path, "w") as cache_file:
             cache_file.write("\n".join([link for link, _ in current_announcements]))
@@ -286,54 +225,106 @@ def report_change(url_data: dict) -> None:
             title = extract_title_from_html(div_block)
             shipment = "Yes" if extract_shipment_from_html(div_block) else "No"
 
-            message = (
-                f"🔗 Link: {announcement}\n\n"
-                f"📚 Title: {title if title else 'Unknown'}\n"
-                f"💰 Price: {price if price else 'Unknown'}€\n"
-                f"📦 Shipment: {shipment}\n"
-            )
-
-            print("ann:" + announcement)
-            details = SubitoAnnuncio(announcement)
+            details = SubitoAd(announcement)
             details.extract_data()
-            print(details.to_json())
 
-            #telegram_bot_send_deal(message)
+            # print(details.to_json())
+
+            async def heavy_function(product_title: str, product_description: str, product_price: float):
+                """Simulates a time-consuming task."""
+                print(f"🔄 Processing task: {title}...")
+                # Assicurati che LLM.compute_score sia un'operazione asincrona
+
+                print(f"✅ Task: {title} completed.")
+
+            if price and price >= 100:
+                llm = LLM.compute_score(details.product_title, details.product_description, details.product_price)
+
+                if llm is None:
+                    print("⚠️ LLM.compute_score ha restituito None. Impossibile elaborare il messaggio.")
+                    return
+
+                message = (
+                    f"🔗 Annuncio: {announcement}\n\n"
+                    f"📌 Titolo: {title if title else 'Sconosciuto'}\n"
+                    f"💶 Prezzo: {price if price else 'Sconosciuto'}€\n"
+                    f"🚚 Spedizione: {shipment}\n"
+                    f"⭐️ Punteggio: {llm['score']}\n"
+                    f"🧐 Valutazione: {llm['reasoning']}\n"
+                    f"🔍 Caratteristiche: {llm['product_feature']}\n"
+                )
+
+            else:
+                message = (
+                    f"🔗 Link: {announcement}\n\n"
+                    f"📚 Title: {title if title else 'Unknown'}\n"
+                    f"💰 Price: {price if price else 'Unknown'}€\n"
+                    f"📦 Shipment: {shipment}\n"
+                )
+
             logger.info(message)
+            telegram_bot_send_deal(message)
 
-            with open(cache_file_path, "a") as cache_file:
-                for announcement, _ in new_announcements:
-                    cache_file.write(announcement + "\n")
+        with open(cache_file_path, "a") as cache_file:
+            for announcement, _ in new_announcements:
+                cache_file.write(announcement + "\n")
     else:
         logger.info("No change detected for %s", url)
 
 
-
-def scan_urls(file_path: str = "subito_urls.json") -> None:
+async def scan_urls_async(file_path: str = "subito_urls.json") -> None:
     """
-    Scans a list of URLs from a JSON file and checks for changes for each.
-
-    :param file_path: The path to the JSON file containing the URLs and filters
+    Asynchronous version of scan_urls to allow async execution.
     """
     urls_data = load_urls_from_json(file_path)
 
-    for url_data in urls_data:
-        report_change(url_data)
-        time.sleep(1)
+    # Esegui le coroutine in parallelo
+    await asyncio.gather(*(report_change_async(url_data) for url_data in urls_data))
 
 
-def main() -> None:
-    logger.info("Starting subito-deal-notifier with COLD_START=%s", COLD_START)
-    scan_urls()
+async def main_loop() -> None:
+    """
+    Main loop that runs the periodic scanning of URLs.
+    """
+    logger.info("Starting subito-deal-notifier with COLD_START=%s", Config.COLD_START)
 
-    schedule.every(SCHEDULE_INTERVAL_MINUTES).minutes.do(scan_urls)
+    # Esegui la prima scansione all'avvio
+    await scan_urls_async()
+
+    # Programma la scansione periodica
+    schedule.every(Config.SCHEDULE_INTERVAL_MINUTES).minutes.do(lambda: asyncio.create_task(scan_urls_async()))
 
     while True:
         try:
             schedule.run_pending()
-            time.sleep(1)
+            await asyncio.sleep(1)
         except Exception as e:
             logger.error("An error occurred: %s", str(e))
 
+
+def run_asyncio_loop(loop):
+    """
+    Runs an asyncio event loop in a separate thread.
+    """
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+
 if __name__ == "__main__":
-    main()
+    # Crea il loop principale per il main
+    main_loop_thread = threading.Thread(target=lambda: asyncio.run(main_loop()), daemon=True)
+
+    # Crea un secondo loop per la coda
+    queue_loop = asyncio.new_event_loop()
+    queue_thread = threading.Thread(target=run_asyncio_loop, args=(queue_loop,), daemon=True)
+
+    # Avvia entrambi i thread
+    main_loop_thread.start()
+    queue_thread.start()
+
+    # Ora avviamo processor.process_queue() nel loop corretto
+    asyncio.run_coroutine_threadsafe(processor.process_queue(), queue_loop)
+
+    # Mantieni il processo in esecuzione
+    main_loop_thread.join()
+    queue_thread.join()

@@ -1,20 +1,34 @@
-from dataclasses import dataclass
-from typing import Dict, List, Annotated
+from dataclasses import dataclass, field
+from typing import Dict, Annotated, List
+
 
 @dataclass
-class input_product:
+class InputProduct:
     product_title: str
     product_description: str
     product_price: float
-    product_features: Dict[str, str]
+    product_features: Dict[str, str] = field(default_factory=dict)
 
-    @property
-    def to_json(self):
+    def to_json(self) -> Dict[str, str]:
         return {
             "title": self.product_title,
             "description": self.product_description,
             "price": self.product_price,
             "features": self.product_features
+        }
+
+
+@dataclass
+class OutputResult:
+    mean_price: float
+    std_price: float
+    context_description: str
+
+    def to_json(self) -> Dict[str, str]:
+        return {
+            "mean_price": self.mean_price,
+            "std_price": self.std_price,
+            "context_description": self.context_description
         }
 
 @dataclass
